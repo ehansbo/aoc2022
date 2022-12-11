@@ -12,42 +12,25 @@ main = do
     monkeysAndDivisors <- manuallyParse "day11" "\n\n" parseMonkey
     let monkeys = map fst monkeysAndDivisors
     let divisor = product $ map snd monkeysAndDivisors
-    let inspections = reverse $ sort $ evalState (solve1 20) monkeys
+    let inspections = reverse $ sort $ evalState (solve 20 (\x -> x `div` 3)) monkeys
     print $ head inspections * (inspections !! 1)
-    let inspections2 = reverse $ sort $ evalState (solve2 10000 divisor) monkeys
+    let inspections2 = reverse $ sort $ evalState (solve 10000 (\x -> x `mod` divisor)) monkeys
     print $ head inspections2 * (inspections2 !! 1)
 
-solve1 :: Int -> MonkeyState [Int]
-solve1 0 = map inspections <$> get
-solve1 rounds = do
+solve :: Int -> (Int -> Int) -> MonkeyState [Int]
+solve 0 _ = map inspections <$> get
+solve rounds reducer = do
     monkeys <- get
-    mapM runRound [0..(length monkeys - 1)]
-    solve1 (rounds - 1)
+    mapM (runRound reducer) [0..(length monkeys - 1)]
+    solve (rounds - 1) reducer
 
-runRound :: Int -> MonkeyState [()]
-runRound monkeyNum = do
+runRound :: (Int -> Int) -> Int -> MonkeyState [()]
+runRound reducer monkeyNum = do
     monkey <- gets (!! monkeyNum)
-    let newItems = map (inspectItem $ operation monkey) (items monkey)
+    let newItems = map ((inspectItem reducer) $ operation monkey) (items monkey)
     let itemShift = map (\i -> ((test monkey) i, i)) newItems
     clearAndUpdateMonkey monkeyNum (length newItems)
     mapM addItemToMonkey itemShift
-
-solve2 :: Int -> Int -> MonkeyState [Int]
-solve2 0 _ = map inspections <$> get
-solve2 rounds divisor = do
-    monkeys <- get
-    mapM (runRound2 divisor) [0..(length monkeys - 1)]
-    solve2 (rounds - 1) divisor
-
-runRound2 :: Int -> Int -> MonkeyState [()]
-runRound2 divisor monkeyNum = do
-    monkey <- gets (!! monkeyNum)
-    let newItems = map (inspectItem2 divisor $ operation monkey) (items monkey)
-    tests <- gets (map test)
-    let itemShift = map (\i -> ((test monkey) i, i)) newItems
-    clearAndUpdateMonkey monkeyNum (length newItems)
-    mapM addItemToMonkey itemShift
-
 
 
 addItemToMonkey :: (Int, Item) -> MonkeyState ()
@@ -64,11 +47,8 @@ clearAndUpdateMonkey i items = do
     put $ before ++ (updateMonkey (head including)) : (tail including)
 
 
-inspectItem :: (Item -> Item) -> Item -> Item
-inspectItem f i = (f i) `div` 3
-
-inspectItem2 :: Int -> (Item -> Item) -> Item -> Item
-inspectItem2 divisor f i = (f i) `mod` divisor
+inspectItem :: (Int -> Int) -> (Item -> Item) -> Item -> Item
+inspectItem reducer f i = reducer $ (f i)
 
 
 parseMonkey :: String -> (Monkey, Int)
