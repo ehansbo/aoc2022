@@ -2,6 +2,7 @@ import DayZero
 import Data.List.Split
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.Sequence as Seq
 import Data.Maybe
 
 data Valve = Valve {name :: String, flow :: Int, valves :: [String]}
@@ -9,8 +10,9 @@ data Valve = Valve {name :: String, flow :: Int, valves :: [String]}
 
 type ValveMap = M.Map String Valve
 
-data UnresolvedMove = Activate | Move Valve
-    deriving Eq
+type ShortestPathMap = M.Map (String, String) Int
+
+type PathSequence = Seq.Seq (Int, String)
 
 instance Ord Valve where
     compare v1 v2 = compare (id v1) (id v2)
@@ -18,35 +20,42 @@ instance Ord Valve where
 main = do
     valves <- manuallyParse "d16" "\n" parseValve
     let valveMap = M.fromList $ zip (map name valves) valves
-    let totalWithFlow = length $ filter (\v -> flow v > 0) valves
-    --print $ solve1 valveMap
-    print $ solve2 valveMap totalWithFlow
+    let relevantValves = map name $ filter (\v -> flow v > 0) valves
+    let relevantPairs = removeOpposites $ filter (\(x, y) -> x /= y) ([("AA", y) | y <- relevantValves] ++ [(x, y) | x <- relevantValves, y <- relevantValves])
+    let distances = M.fromList $ concatMap (\((a, b), x) -> if a == "AA" then [((a, b), x)] else [((a, b), x), ((b, a), x)]) $ map (\(start, stop) -> ((start, stop), bfs S.empty valveMap stop (Seq.singleton (0, start)))) relevantPairs
+    print $ solve1 30 "AA" distances valveMap relevantValves
+    print $ solve2 distances valveMap relevantValves
+    
+solve2 :: ShortestPathMap -> ValveMap -> [String] -> Int
+solve2 distances valveMap relevantValves =
+    let combinations = filter (\(a, b) -> length a >= length b && length b > 3) $ subsetPairs relevantValves -- assuming the elephant uses at least 4 valves.
+        solve rv = solve1 26 "AA" distances valveMap rv
+    in maximum $ map (\(rv1, rv2) -> solve rv1 + solve rv2) combinations
 
-parseValve :: String -> Valve
-parseValve str = 
-    let splitStr = splitOn " " str
-    in Valve (splitStr !! 1) (read (filter isNumber (splitStr !! 4))) (map (filter (/= ',')) (drop 9 splitStr))
+subsets :: [a] -> [[a]]
+subsets [] = [[]]
+subsets (x:xs) = subsets xs ++ map (x:) (subsets xs)
 
-solve2 :: ValveMap -> Int -> Int
-solve2 m totalWithFlow = solve2' 26 totalWithFlow (m M.! "AA") (m M.! "AA") m S.empty S.empty S.empty
+subsetPairs :: Eq a => [a] -> [([a], [a])]
+subsetPairs xs = 
+    let possibleSubsets = subsets xs
+    in map (\possibleSubset -> (possibleSubset, filter (\element -> not $ element `elem` possibleSubset) xs)) possibleSubsets
 
-solve2' :: Int -> Int -> Valve -> Valve -> ValveMap -> S.Set String -> S.Set String -> S.Set String -> Int
-solve2' 0 _ _ _ _ _ _ _ = 0
-solve2' remaining totalWithFlow valveMe valveElephant valveMap activated visitedMe visitedElephant = 
-    -- To make moves, we need to make unresolved moves first and then resolve them in pairs, because we will change activated based on the pairing.
-    let unresolvedMovesMe = getUnresolvedMoves valveMe visitedMe Nothing
-        unresolvedMovesElephant = getUnresolvedMoves valveElephant visitedElephant (Just $ valveMe)
-        remaining' = remaining - 1
-        getUnresolvedMoves valve visited maybeDone = -- We only want to activate the valve for either elephant or me if we are in the same spot.
-            if maybeDone /= (Just valve) && flow valve /= 0 &&  (not $ (name valve) `S.member` activated) then [Activate] else []
-            ++ map Move (map (valveMap M.!) (filter (\v -> not $ (v `elem` visited)) $ valves valve))
-        unresolvedPairs = [(x, y) | x <- unresolvedMovesMe, y <- unresolvedMovesElephant]
-        unresolvedPairs' = if valveMe /= valveElephant then unresolvedPairs else removeOpposites unresolvedPairs
-        resolve (Move valveMe', Move valveElephant') = solve2' remaining' totalWithFlow valveMe' valveElephant' valveMap activated (S.insert (name valveMe) visitedMe) (S.insert (name valveElephant) visitedElephant)
-        resolve (Activate, Move valveElephant') = (remaining' * flow valveMe) + (solve2' remaining' totalWithFlow valveMe valveElephant' valveMap (S.insert (name valveMe) activated) S.empty (S.insert (name valveElephant) visitedElephant))
-        resolve (Move valveMe', Activate) = (remaining' * flow valveElephant) + (solve2' remaining' totalWithFlow valveMe' valveElephant valveMap (S.insert (name valveElephant) activated) (S.insert (name valveMe) visitedMe) S.empty)
-        resolve (Activate, Activate) = remaining' * (flow valveElephant + flow valveMe) + (solve2' remaining' totalWithFlow valveMe valveElephant valveMap ((S.insert (name valveElephant) . S.insert (name valveMe)) activated) S.empty S.empty)
-    in if totalWithFlow == S.size activated then 0 else maximum $ 0 : map resolve unresolvedPairs
+solve1 :: Int -> String -> ShortestPathMap -> ValveMap -> [String] -> Int
+solve1 time curr distances valveMap relevantValves =
+    let solveFor next =
+         let distance = distances M.! (curr, next)
+             time' = time - distance - 1
+         in time' * (flow $ valveMap M.! next) + solve1 time' next distances valveMap (filter (/= next) relevantValves)
+        solutions = map solveFor relevantValves
+    in if time <= 0 then 0 else maximum $ 0:solutions
+    
+bfs :: S.Set String -> ValveMap -> String -> PathSequence -> Int
+bfs visited valveMap stop queue =
+    let (i, curr) = fromJust $ Seq.lookup 0 queue
+        neighbors = filter (\v -> not $ S.member v visited) $ valves (valveMap M.! curr)
+        queue' = (Seq.drop 1 queue) Seq.>< (Seq.fromList $ zip (repeat $ i+1) neighbors)
+    in if curr == stop then i else bfs (S.insert curr visited) valveMap stop queue'
 
 removeOpposites :: Eq a => [(a, a)] -> [(a, a)]
 removeOpposites ((x, y):xys) = (x, y):(removeOpposites $ remove (y, x) xys)
@@ -56,18 +65,7 @@ removeOpposites ((x, y):xys) = (x, y):(removeOpposites $ remove (y, x) xys)
           remove _ [] = []
 removeOpposites [] = []
 
-
-solve1 :: ValveMap -> Int
-solve1 m = solve1' 30 (m M.! "AA") m S.empty []
-
-solve1' :: Int -> Valve -> ValveMap -> S.Set String -> [String] -> Int
-solve1' 0 _ _ _ _ = 0
-solve1' remaining valve valveMap activated visited =
-    let remaining' = remaining - 1
-        nextSolve valve' activated' visited' = solve1' remaining' valve' valveMap activated' visited'
-        openValve = 
-            if (flow valve /= 0 && (not $ (name valve) `S.member` activated))
-                then Just $ remaining' * flow valve + nextSolve valve (S.insert (name valve) activated) []
-                else Nothing
-        moves = map (\valve' -> nextSolve valve' activated (name valve : visited)) (map (valveMap M.!) (filter (\v -> not $ (v `elem` visited)) $ valves valve))
-    in maximum $ if openValve == Nothing then 0:moves else (fromJust openValve) : 0 : moves
+parseValve :: String -> Valve
+parseValve str = 
+    let splitStr = splitOn " " str
+    in Valve (splitStr !! 1) (read (filter isNumber (splitStr !! 4))) (map (filter (/= ',')) (drop 9 splitStr))
